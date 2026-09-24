@@ -19,6 +19,7 @@ from music_assistant.constants import (
     HASSIO_SUPERVISOR_IP,
     HOMEASSISTANT_SYSTEM_USER,
     MASS_LOGGER_NAME,
+    TRUSTED_PROXY_SITE_KEY,
     VERBOSE_LOG_LEVEL,
 )
 
@@ -93,6 +94,14 @@ async def get_authenticated_user(request: web.Request) -> User | None:
         return cast("User | None", request[USER_CONTEXT_KEY])
 
     mass: MusicAssistant = request.app["mass"]
+
+    # Check for connections from the trusted reverse proxy, which authenticated upstream.
+    # An unresolved identity falls through so the regular token flow still works.
+    if is_request_from_trusted_proxy(request):
+        proxy_user = await resolve_trusted_proxy_user(mass, request)
+        if proxy_user is not None:
+            request[USER_CONTEXT_KEY] = proxy_user
+            return proxy_user
 
     # Check for Home Assistant Ingress connections
     if is_request_from_ingress_proxy(request):
@@ -452,6 +461,71 @@ def is_request_from_ingress(request: web.Request) -> bool:
         pass
 
     return False
+
+
+def is_request_from_trusted_proxy(request: web.Request) -> bool:
+    """
+    Check if request arrived on the dedicated trusted-proxy listener.
+
+    Mirrors is_request_from_ingress: trust comes from the socket that accepted the
+    connection, never from the headers themselves. Only the port is compared, because
+    the trusted site is the sole listener on it and a wildcard bind reports the
+    address the packet happened to land on rather than the configured one.
+
+    :param request: The aiohttp request.
+    """
+    site_params = request.app.get(TRUSTED_PROXY_SITE_KEY)
+    if not site_params:
+        return False
+
+    try:
+        transport = request.transport
+        if transport:
+            sockname = transport.get_extra_info("sockname")
+            if sockname and len(sockname) >= 2:
+                return bool(sockname[1] == site_params["port"])
+    except Exception:  # noqa: S110
+        pass
+
+    return False
+
+
+async def resolve_trusted_proxy_user(mass: MusicAssistant, request: web.Request) -> User | None:
+    """
+    Resolve the user named by the trusted proxy's identity header.
+
+    Only pre-existing, enabled users are accepted. Accounts are never provisioned from
+    the header, so a misconfigured proxy cannot mint access, and revoking a user in
+    Music Assistant is enough to lock them out regardless of what the IdP still asserts.
+
+    :param mass: MusicAssistant instance.
+    :param request: The aiohttp request.
+    :return: The matching user, or None to fall through to regular token auth.
+    """
+    site_params = request.app.get(TRUSTED_PROXY_SITE_KEY)
+    if not site_params:
+        return None
+
+    identity = request.headers.get(site_params["header"])
+    if not identity:
+        return None
+
+    user = await mass.webserver.auth.get_user_by_username(identity)
+    if user is None:
+        LOGGER.warning(
+            "Trusted proxy presented unknown identity '%s' - create a matching user "
+            "in Music Assistant first",
+            identity,
+        )
+        return None
+    if not user.enabled:
+        LOGGER.warning("Trusted proxy identity '%s' maps to a disabled user", identity)
+        return None
+    if user.username == HOMEASSISTANT_SYSTEM_USER:
+        # the system user belongs to the ingress/internal path only
+        return None
+
+    return user
 
 
 class ImpersonatedUser:

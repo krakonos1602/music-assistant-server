@@ -51,6 +51,9 @@ from music_assistant.constants import (
     CONF_BIND_PORT,
     CONF_VALUE_AUTO,
     DEFAULT_HOST,
+    DEFAULT_TRUSTED_PROXY_HEADER,
+    ENV_TRUSTED_PROXY_HEADER,
+    ENV_TRUSTED_PROXY_PORT,
     INGRESS_SERVER_PORT,
     RESOURCES_DIR,
     SENDSPIN_SERVER_PORT,
@@ -370,6 +373,13 @@ class WebserverController(CoreController):
             ingress_tcp_site_params = (ingress_host, INGRESS_SERVER_PORT)
         else:
             ingress_tcp_site_params = None
+        # opt-in listener for a reverse proxy that authenticates in front of us
+        trusted_proxy_site_params: dict[str, Any] | None = None
+        if trusted_proxy_port := os.environ.get(ENV_TRUSTED_PROXY_PORT):
+            trusted_proxy_site_params = {
+                "port": int(trusted_proxy_port),
+                "header": os.environ.get(ENV_TRUSTED_PROXY_HEADER, DEFAULT_TRUSTED_PROXY_HEADER),
+            }
         port_value = config.get_value(CONF_BIND_PORT)
         assert isinstance(port_value, int)
         self.publish_port = port_value
@@ -397,6 +407,7 @@ class WebserverController(CoreController):
             # add assets subdir as static_content
             static_content=("/assets", os.path.join(frontend_dir, "assets"), "assets"),
             ingress_tcp_site_params=ingress_tcp_site_params,
+            trusted_proxy_site_params=trusted_proxy_site_params,
             # Add mass object to app for use by the auth helpers
             app_state={"mass": self.mass},
             ssl_context=ssl_context,
