@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from aiohttp import web
 
-from music_assistant.constants import WILDCARD_BIND_IPS
+from music_assistant.constants import TRUSTED_PROXY_SITE_KEY, WILDCARD_BIND_IPS
 
 if TYPE_CHECKING:
     import logging
@@ -65,6 +65,7 @@ class Webserver:
         self._bind_port: int | None = None
         self._bind_ip: str | None = None
         self._ingress_tcp_site: web.TCPSite | None = None
+        self._trusted_proxy_tcp_site: web.TCPSite | None = None
 
     async def setup(
         self,
@@ -73,6 +74,7 @@ class Webserver:
         static_routes: list[tuple[str, str, Handler]] | None = None,
         static_content: tuple[str, str, str] | None = None,
         ingress_tcp_site_params: tuple[str, int] | None = None,
+        trusted_proxy_site_params: dict[str, Any] | None = None,
         app_state: dict[str, Any] | None = None,
         ssl_context: Any | None = None,
     ) -> None:
@@ -87,6 +89,8 @@ class Webserver:
         :param static_routes: List of static routes to register.
         :param static_content: Tuple of (path, directory, name) for static content.
         :param ingress_tcp_site_params: Tuple of (host, port) for ingress TCP site.
+        :param trusted_proxy_site_params: Dict with ``port`` and ``header`` for the
+            trusted reverse proxy TCP site.
         :param app_state: Optional dict of key-value pairs to set on app before starting.
         :param ssl_context: Optional SSL context for HTTPS support.
         """
@@ -162,6 +166,21 @@ class Webserver:
                 port=ingress_tcp_site_params[1],
             )
             await self._ingress_tcp_site.start()
+        # start additional TCP site reserved for an authenticating reverse proxy
+        if trusted_proxy_site_params:
+            self._webapp[TRUSTED_PROXY_SITE_KEY] = trusted_proxy_site_params
+            self._trusted_proxy_tcp_site = web.TCPSite(
+                self._apprunner,
+                host=None,
+                port=trusted_proxy_site_params["port"],
+            )
+            await self._trusted_proxy_tcp_site.start()
+            self.logger.warning(
+                "Trusted proxy listener started on port %s (identity header: %s) - "
+                "this port must be firewalled to the reverse proxy only",
+                trusted_proxy_site_params["port"],
+                trusted_proxy_site_params["header"],
+            )
 
     async def close(self) -> None:
         """Cleanup on exit."""
@@ -170,6 +189,8 @@ class Webserver:
             await self._tcp_site.stop()
         if self._ingress_tcp_site:
             await self._ingress_tcp_site.stop()
+        if self._trusted_proxy_tcp_site:
+            await self._trusted_proxy_tcp_site.stop()
         if self._apprunner:
             await self._apprunner.cleanup()
         if self._webapp:

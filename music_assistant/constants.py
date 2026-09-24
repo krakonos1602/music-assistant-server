@@ -69,6 +69,12 @@ INGRESS_SERVER_PORT: Final[int] = 8094
 HASSIO_SUPERVISOR_IP: Final[str] = "172.30.32.2"
 # Origin of the hosted Music Assistant web app, used for Remote Access
 APP_MA_HOST: Final[str] = "https://app.music-assistant.io"
+# App key holding the trusted-proxy listener params, set when that site is started
+TRUSTED_PROXY_SITE_KEY: Final[str] = "trusted_proxy_site"
+# Env vars enabling the trusted reverse proxy listener (opt-in, off by default)
+ENV_TRUSTED_PROXY_PORT: Final[str] = "MASS_TRUSTED_PROXY_PORT"
+ENV_TRUSTED_PROXY_HEADER: Final[str] = "MASS_TRUSTED_PROXY_HEADER"
+DEFAULT_TRUSTED_PROXY_HEADER: Final[str] = "X-Forwarded-User"
 
 UNKNOWN_ARTIST: Final[str] = "[unknown]"
 UNKNOWN_ARTIST_ID_MBID: Final[str] = "125ec42a-7229-4250-afc5-e057484327fe"

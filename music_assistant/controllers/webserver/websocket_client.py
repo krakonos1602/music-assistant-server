@@ -45,7 +45,9 @@ from .helpers.auth_middleware import (
     has_scope,
     is_request_from_ingress,
     is_request_from_ingress_proxy,
+    is_request_from_trusted_proxy,
     resolve_command_impersonation,
+    resolve_trusted_proxy_user,
     set_current_client_id,
     set_current_token,
     set_current_user,
@@ -84,6 +86,7 @@ class WebsocketClientHandler:
         self._locale: str | None = None  # UI locale declared by the client (auth arg / set_locale)
         self._is_ingress = is_request_from_ingress(request)
         self._is_ingress_proxy = is_request_from_ingress_proxy(request)
+        self._is_trusted_proxy = is_request_from_trusted_proxy(request)
         self._events_unsub_callback: Any = None  # Will be set after authentication
         # Track WebRTC session ID if this is a WebRTC gateway connection
         self._webrtc_session_id: str | None = request.query.get("webrtc_session_id")
@@ -145,6 +148,10 @@ class WebsocketClientHandler:
         if self._is_ingress_proxy:
             await self._handle_ingress_auth()
             self._subscribe_to_events()
+        elif self._is_trusted_proxy:
+            await self._handle_trusted_proxy_auth()
+            if self._authenticated_user is not None:
+                self._subscribe_to_events()
 
         disconnect_warn = None
 
@@ -489,6 +496,16 @@ class WebsocketClientHandler:
         self._locale = locale
         await self.mass.translations.ensure_locale_loaded(locale)
         await self._send_message(SuccessResultMessage(msg.message_id, {"locale": locale}))
+
+    async def _handle_trusted_proxy_auth(self) -> None:
+        """Authenticate a connection arriving on the trusted reverse proxy listener."""
+        user = await resolve_trusted_proxy_user(self.mass, self.request)
+        if user is None:
+            # leave the connection unauthenticated so the regular auth command still works
+            self._logger.debug("Trusted proxy connection without a resolvable identity")
+            return
+        self._authenticated_user = user
+        self._logger.debug("Trusted proxy user authenticated: %s", user.username)
 
     async def _handle_ingress_auth(self) -> None:
         """Handle authentication for Ingress connections (auto-create/link user)."""
