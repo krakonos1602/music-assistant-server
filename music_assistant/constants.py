@@ -75,6 +75,15 @@ TRUSTED_PROXY_SITE_KEY: Final[str] = "trusted_proxy_site"
 ENV_TRUSTED_PROXY_PORT: Final[str] = "MASS_TRUSTED_PROXY_PORT"
 ENV_TRUSTED_PROXY_HEADER: Final[str] = "MASS_TRUSTED_PROXY_HEADER"
 DEFAULT_TRUSTED_PROXY_HEADER: Final[str] = "X-Forwarded-User"
+ENV_TRUSTED_PROXY_LOGOUT_PATH: Final[str] = "MASS_TRUSTED_PROXY_LOGOUT_PATH"
+DEFAULT_TRUSTED_PROXY_LOGOUT_PATH: Final[str] = "/oauth2/logout"
+# Marks a browser that already received a bootstrapped token, so a reload does not mint another.
+# Deliberately shorter-lived than the token it stands for, so the marker lapses first and the
+# next visit mints a fresh one instead of landing on the login form.
+TRUSTED_PROXY_COOKIE: Final[str] = "_ma_proxy_session"
+TRUSTED_PROXY_COOKIE_MAX_AGE: Final[int] = 7 * 24 * 3600
+# A logout is only honoured for the reload that immediately follows it
+TRUSTED_PROXY_LOGOUT_WINDOW: Final[int] = 30
 
 UNKNOWN_ARTIST: Final[str] = "[unknown]"
 UNKNOWN_ARTIST_ID_MBID: Final[str] = "125ec42a-7229-4250-afc5-e057484327fe"
