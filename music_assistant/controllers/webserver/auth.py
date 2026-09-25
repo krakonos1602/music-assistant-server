@@ -33,6 +33,7 @@ from music_assistant.constants import (
     DB_TABLE_PLAYLOG,
     HOMEASSISTANT_SYSTEM_USER,
     MASS_LOGGER_NAME,
+    TRUSTED_PROXY_LOGOUT_WINDOW,
 )
 from music_assistant.controllers.webserver.helpers.auth_middleware import (
     ROLE_SCOPES,
@@ -129,6 +130,8 @@ class AuthenticationManager:
         # Serialises the read-modify-write of the user access filters
         self._user_filter_lock = asyncio.Lock()
         self._access_revoked_callbacks: list[Callable[[User], None]] = []
+        # username -> monotonic timestamp of a logout awaiting the reload that follows it
+        self._proxy_logouts: dict[str, float] = {}
 
     async def setup(self) -> None:
         """Initialize the authentication manager."""
@@ -1477,6 +1480,11 @@ class AuthenticationManager:
         if not user:
             raise AuthenticationRequired("Not authenticated")
 
+        # Record the intent before the checks below can bail out. A proxy-authenticated
+        # client may have no token to revoke, but still needs its upstream SSO session
+        # ended rather than silently restored by the reload that follows.
+        self.note_proxy_logout(user.username)
+
         # Get current token from context
         token = get_current_token()
         if not token:
@@ -1492,6 +1500,31 @@ class AuthenticationManager:
             self.webserver.disconnect_websockets_for_token(token_row["token_id"])
 
         self.logger.info("User '%s' logged out", user.username)
+
+    def note_proxy_logout(self, username: str) -> None:
+        """
+        Record that a user asked to be logged out.
+
+        :param username: The username that requested the logout.
+        """
+        now = asyncio.get_running_loop().time()
+        # drop entries whose reload never arrived, so the map cannot grow unbounded
+        self._proxy_logouts = {
+            k: v for k, v in self._proxy_logouts.items() if now - v < TRUSTED_PROXY_LOGOUT_WINDOW
+        }
+        self._proxy_logouts[normalize_username(username)] = now
+
+    def consume_proxy_logout(self, username: str) -> bool:
+        """
+        Return whether a logout is pending for this user, clearing it in the process.
+
+        :param username: The username to check.
+        """
+        recorded = self._proxy_logouts.pop(normalize_username(username), None)
+        if recorded is None:
+            return False
+        # a stale entry belongs to an earlier visit, not to the reload being handled now
+        return (asyncio.get_running_loop().time() - recorded) < TRUSTED_PROXY_LOGOUT_WINDOW
 
     @api_command("auth/user/providers")
     async def get_my_providers(self) -> list[dict[str, Any]]:

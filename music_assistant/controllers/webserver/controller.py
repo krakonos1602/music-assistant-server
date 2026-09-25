@@ -49,11 +49,16 @@ from music_assistant.constants import (
     CONF_VALUE_AUTO,
     DEFAULT_HOST,
     DEFAULT_TRUSTED_PROXY_HEADER,
+    DEFAULT_TRUSTED_PROXY_LOGOUT_PATH,
     ENV_TRUSTED_PROXY_HEADER,
+    ENV_TRUSTED_PROXY_LOGOUT_PATH,
     ENV_TRUSTED_PROXY_PORT,
     INGRESS_SERVER_PORT,
     RESOURCES_DIR,
     SENDSPIN_SERVER_PORT,
+    TRUSTED_PROXY_COOKIE,
+    TRUSTED_PROXY_COOKIE_MAX_AGE,
+    TRUSTED_PROXY_SITE_KEY,
     VERBOSE_LOG_LEVEL,
     WILDCARD_BIND_IPS,
 )
@@ -82,7 +87,9 @@ from .helpers.auth_middleware import (
     get_authenticated_user,
     has_scope,
     is_request_from_ingress_proxy,
+    is_request_from_trusted_proxy,
     resolve_command_impersonation,
+    resolve_trusted_proxy_user,
     set_current_peer_address,
     set_current_token,
     set_current_user,
@@ -376,6 +383,9 @@ class WebserverController(CoreController):
             trusted_proxy_site_params = {
                 "port": int(trusted_proxy_port),
                 "header": os.environ.get(ENV_TRUSTED_PROXY_HEADER, DEFAULT_TRUSTED_PROXY_HEADER),
+                "logout_path": os.environ.get(
+                    ENV_TRUSTED_PROXY_LOGOUT_PATH, DEFAULT_TRUSTED_PROXY_LOGOUT_PATH
+                ),
             }
         port_value = config.get_value(CONF_BIND_PORT)
         assert isinstance(port_value, int)
@@ -958,9 +968,61 @@ class WebserverController(CoreController):
         html_content = html_content.replace("{{ERROR_MESSAGE}}", html.escape(error_message))
         return web.Response(text=html_content, content_type="text/html", status=status)
 
+    async def _handle_trusted_proxy_index(self, request: web.Request) -> web.Response | None:
+        """
+        Bootstrap or end a frontend session for a visit through the trusted proxy.
+
+        The frontend only ever authenticates from a stored token, so a visitor the proxy has
+        already authenticated would still meet the built-in login form. Hand them one through
+        the ``code`` parameter the frontend understands, and mark the browser so that a plain
+        reload does not mint a second token on every page load.
+
+        :param request: The aiohttp request.
+        :return: The redirect to perform, or None to serve the index as usual.
+        """
+        user = await resolve_trusted_proxy_user(self.mass, request)
+        if user is None:
+            return None
+        site_params = cast("dict[str, Any]", request.app.get(TRUSTED_PROXY_SITE_KEY) or {})
+
+        if self.auth.consume_proxy_logout(user.username):
+            # the reload after a logout must end the upstream session, not restart it
+            response = web.Response(
+                status=302,
+                headers={"Location": site_params.get("logout_path", "/")},
+            )
+            response.del_cookie(TRUSTED_PROXY_COOKIE)
+            return response
+
+        marker = hashlib.sha256(user.username.encode()).hexdigest()
+        if request.cookies.get(TRUSTED_PROXY_COOKIE) == marker:
+            # this browser already holds a token for this identity
+            return None
+
+        token = await self.auth.create_token(user, "SSO proxy session")
+        # rel_url is our own, so feeding it back cannot turn into an open redirect
+        response = web.Response(
+            status=302,
+            headers={"Location": build_code_redirect_url(str(request.rel_url), token)},
+        )
+        response.set_cookie(
+            TRUSTED_PROXY_COOKIE,
+            marker,
+            max_age=TRUSTED_PROXY_COOKIE_MAX_AGE,
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+        )
+        self.logger.debug("Bootstrapped a proxy session for %s", user.username)
+        return response
+
     async def _handle_index(self, request: web.Request) -> web.StreamResponse:
         """Handle request for index page (Vue frontend)."""
         is_ingress_request = is_request_from_ingress_proxy(request)
+
+        if request.method == "GET" and is_request_from_trusted_proxy(request):
+            if response := await self._handle_trusted_proxy_index(request):
+                return response
 
         if (not self.auth.has_users or not self.mass.config.onboard_done) and is_ingress_request:
             # a non-admin user tries to access the index via HA ingress
