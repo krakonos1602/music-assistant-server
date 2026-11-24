@@ -618,8 +618,7 @@ class SendspinBasePlayer(PlayerProtocol):
         declining the audio input persists via the player config. Bridge/web players
         and unencrypted (legacy) connections have nothing to pair. A device another server
         holds, or one that refused this server, is dialed for the pairing. A device whose
-        line-in was allowed and can sense a signal then picks where that line-in plays
-        automatically.
+        line-in was allowed then picks where that line-in plays automatically.
 
         :param session: The setup flow session used to interact with the user.
         """
@@ -691,11 +690,9 @@ class SendspinBasePlayer(PlayerProtocol):
         await session.finish({})
 
     def _get_source_autostart_config_entries(self) -> list[ConfigEntry]:
-        """Return the line-in autostart entries for source clients, or a note when they cannot sense a signal."""
+        """Return the line-in autostart entries for source clients."""
         if "source" not in self._negotiated_families():
             return []
-        if not self._supports_line_sense():
-            return [ConfigEntry(key="source_autostart_unavailable", type=ConfigEntryType.LABEL)]
         # A source that is also a player defaults to playing on itself: the player it belongs to.
         own_target = (
             self.player.player_id
@@ -730,15 +727,6 @@ class SendspinBasePlayer(PlayerProtocol):
     def _negotiated_families(self) -> set[str]:
         """Role families the client negotiated, which survive an inactive/unpaired state."""
         return {role_family(role_id) for role_id in self.api.negotiated_role_ids}
-
-    def _supports_line_sense(self) -> bool:
-        """Whether this client has a source role that reports line-in signal presence."""
-        if "source" not in self._negotiated_families():
-            return False
-        info = self.api.info_or_none
-        support = info.source_support if info else None
-        features = support.features if support else None
-        return bool(features and features.line_sense)
 
     @property
     def _is_bridge_or_web_player(self) -> bool:
@@ -792,9 +780,7 @@ class SendspinBasePlayer(PlayerProtocol):
             )
         # A device with an audio input needs its own wording; the rest of the page is shared.
         step_id = "approve_device_source" if has_input else "approve_device"
-        values = await session.form(
-            entries, step_id=step_id, last_step=not self._supports_line_sense()
-        )
+        values = await session.form(entries, step_id=step_id, last_step=not has_input)
         method = str(values.get(CONF_CONNECT_METHOD, options[0].value))
         if method == CONNECT_METHOD_PAIR:
             return True
@@ -829,8 +815,8 @@ class SendspinBasePlayer(PlayerProtocol):
         return True
 
     async def _run_source_autostart_step(self, session: SetupSession) -> None:
-        """Ask where the line-in plays automatically, for a device that can sense a signal on it."""
-        if not self._supports_line_sense():
+        """Ask where the line-in plays automatically, for a device with an audio input."""
+        if "source" not in self._negotiated_families():
             return
         entry = self._get_source_autostart_config_entries()[0]
         entry.value = session.context.values.get(CONF_SOURCE_AUTOSTART_TARGET)

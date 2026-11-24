@@ -9,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from aiosendspin.models.core import ClientHelloPayload
 from aiosendspin.models.core import DeviceInfo as SendspinDeviceInfo
-from aiosendspin.models.source import ClientHelloSourceFeatures, ClientHelloSourceSupport
 from aiosendspin.noise.trust_store import PskCategory
 from music_assistant_models.enums import ConfigEntryType, IdentifierType, PlayerType, ProtocolRole
 
@@ -42,7 +41,6 @@ if TYPE_CHECKING:
 def _player(
     *,
     negotiated_role_ids: list[str],
-    line_sense: bool,
     known_players: list[str],
     unavailable_players: list[str] | None = None,
     non_audio_players: dict[str, PlayerType] | None = None,
@@ -56,9 +54,6 @@ def _player(
         "SendspinClient",
         SimpleNamespace(
             negotiated_role_ids=negotiated_role_ids,
-            info_or_none=SimpleNamespace(
-                source_support=SimpleNamespace(features=SimpleNamespace(line_sense=line_sense))
-            ),
         ),
     )
     player.mass = cast(
@@ -88,18 +83,9 @@ def _target_entry(player: SendspinBasePlayer) -> ConfigEntry | None:
     return next((e for e in entries if e.key == CONF_SOURCE_AUTOSTART_TARGET), None)
 
 
-def test_a_source_without_line_sense_gets_a_note_instead_of_the_setting() -> None:
-    """A source that cannot report signal presence has no trigger, so it explains why instead."""
-    player = _player(negotiated_role_ids=["source@v1"], line_sense=False, known_players=["speaker"])
-    entries = player._get_source_autostart_config_entries()
-    assert [(e.key, e.type) for e in entries] == [
-        ("source_autostart_unavailable", ConfigEntryType.LABEL)
-    ]
-
-
 def test_no_autostart_entries_for_a_client_without_a_source_role() -> None:
     """A plain speaker never shows line-in settings."""
-    player = _player(negotiated_role_ids=["player@v1"], line_sense=True, known_players=["speaker"])
+    player = _player(negotiated_role_ids=["player@v1"], known_players=["speaker"])
     assert player._get_source_autostart_config_entries() == []
 
 
@@ -115,7 +101,7 @@ async def _all_entries(player: SendspinBasePlayer) -> list[ConfigEntry]:
 
 async def test_a_source_offers_the_analysis_switch_enabled() -> None:
     """An input may be analysed until the user disables it, such as for a microphone."""
-    player = _player(negotiated_role_ids=["source@v1"], line_sense=False, known_players=[])
+    player = _player(negotiated_role_ids=["source@v1"], known_players=[])
     entries = await _all_entries(player)
     entry = next((e for e in entries if e.key == CONF_ALLOW_AUDIO_ANALYSIS), None)
     assert entry is not None
@@ -126,15 +112,13 @@ async def test_a_source_offers_the_analysis_switch_enabled() -> None:
 
 async def test_no_analysis_switch_for_a_client_without_a_source_role() -> None:
     """A plain speaker has no input to analyse."""
-    player = _player(negotiated_role_ids=["player@v1"], line_sense=False, known_players=[])
+    player = _player(negotiated_role_ids=["player@v1"], known_players=[])
     assert CONF_ALLOW_AUDIO_ANALYSIS not in {e.key for e in await _all_entries(player)}
 
 
 async def test_a_speaker_with_an_input_offers_a_name_for_it() -> None:
     """The input of a device that also plays gets its own name, Line-in until the user sets one."""
-    player = _player(
-        negotiated_role_ids=["player@v1", "source@v1"], line_sense=False, known_players=[]
-    )
+    player = _player(negotiated_role_ids=["player@v1", "source@v1"], known_players=[])
     entry = next((e for e in await _all_entries(player) if e.key == CONF_SOURCE_NAME), None)
     assert entry is not None
     assert entry.type == ConfigEntryType.STRING
@@ -144,13 +128,13 @@ async def test_a_speaker_with_an_input_offers_a_name_for_it() -> None:
 @pytest.mark.parametrize("roles", [["source@v1"], ["player@v1"]], ids=["capture_only", "speaker"])
 async def test_no_input_name_without_both_an_input_and_an_output(roles: list[str]) -> None:
     """A capture-only device is named by its player, and a plain speaker has no input."""
-    player = _player(negotiated_role_ids=roles, line_sense=False, known_players=[])
+    player = _player(negotiated_role_ids=roles, known_players=[])
     assert CONF_SOURCE_NAME not in {e.key for e in await _all_entries(player)}
 
 
 def test_capture_only_source_defaults_to_off() -> None:
     """With no player of its own there is no sensible target, so autostart stays off."""
-    player = _player(negotiated_role_ids=["source@v1"], line_sense=True, known_players=["speaker"])
+    player = _player(negotiated_role_ids=["source@v1"], known_players=["speaker"])
     entry = _target_entry(player)
     assert entry is not None
     assert entry.default_value == SOURCE_AUTOSTART_OFF
@@ -160,7 +144,6 @@ def test_a_source_that_is_also_a_player_defaults_to_itself() -> None:
     """A turntable that can play defaults to playing its own line-in, with nothing saved."""
     player = _player(
         negotiated_role_ids=["source@v1", "player@v1"],
-        line_sense=True,
         known_players=["turntable", "speaker"],
     )
     entry = _target_entry(player)
@@ -172,7 +155,6 @@ def test_an_unavailable_player_is_not_selectable() -> None:
     """Unavailable players are not offered as autostart targets."""
     player = _player(
         negotiated_role_ids=["source@v1"],
-        line_sense=True,
         known_players=["other-speaker"],
         unavailable_players=["sleeping-speaker"],
     )
@@ -185,7 +167,6 @@ def test_the_devices_own_player_stays_the_default_while_unavailable() -> None:
     """A device still being set up is unavailable, yet it stays the default it later resolves to."""
     player = _player(
         negotiated_role_ids=["source@v1", "player@v1"],
-        line_sense=True,
         known_players=["speaker"],
         unavailable_players=["turntable"],
     )
@@ -199,7 +180,6 @@ def test_players_that_cannot_render_audio_are_not_offered() -> None:
     """Lights, displays and other capture-only clients are nowhere to play a line-in."""
     player = _player(
         negotiated_role_ids=["source@v1"],
-        line_sense=True,
         known_players=["speaker"],
         non_audio_players={
             "lamp": PlayerType.LIGHT,
@@ -216,7 +196,6 @@ def test_the_devices_own_player_leads_the_target_list() -> None:
     """Off stays first, then the default, so it is not buried among every other player."""
     player = _player(
         negotiated_role_ids=["source@v1", "player@v1"],
-        line_sense=True,
         known_players=["amp", "turntable", "zone"],
     )
     entry = _target_entry(player)
@@ -234,7 +213,6 @@ def test_the_player_the_source_belongs_to_is_the_default_target() -> None:
     """A source defaults to the player it is attached to, whose id is not its client id."""
     player = _player(
         negotiated_role_ids=["source@v1", "player@v1"],
-        line_sense=True,
         known_players=["amp", "pl0123456789ab"],
         player_id="pl0123456789ab",
     )
@@ -252,7 +230,6 @@ def test_groups_and_multi_channel_players_are_offered() -> None:
     """A line-in must be routable to a group, not just to a single speaker."""
     player = _player(
         negotiated_role_ids=["source@v1"],
-        line_sense=True,
         known_players=["speaker"],
         non_audio_players={"kitchen-group": PlayerType.GROUP, "pair": PlayerType.MULTI_CHANNEL},
     )
@@ -266,7 +243,7 @@ LINE_IN_ID = "linein-key-id-0001"
 
 def _line_in(sendspin: FakePlayerProvider) -> SendspinSourcePlayer:
     """
-    Connect a line-in that senses a signal, and return the protocol the provider creates.
+    Connect a line-in, and return the protocol the provider creates.
 
     :param sendspin: The Sendspin provider.
     """
@@ -276,9 +253,6 @@ def _line_in(sendspin: FakePlayerProvider) -> SendspinSourcePlayer:
         version=1,
         supported_roles=["source@v1"],
         device_info=SendspinDeviceInfo(product_name="ESP32 Line-in", manufacturer="Espressif"),
-        source_support=ClientHelloSourceSupport(
-            features=ClientHelloSourceFeatures(line_sense=True)
-        ),
     )
     client = MagicMock(
         client_id=LINE_IN_ID,

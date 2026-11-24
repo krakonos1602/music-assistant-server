@@ -50,6 +50,7 @@ from music_assistant.providers.sendspin.constants import (
     PAIR_METHOD_PIN,
     PAIR_METHOD_STATIC_PIN,
     PAIR_METHOD_TOKEN,
+    SOURCE_AUTOSTART_OFF,
     SOURCE_INPUT_DISMISS,
     SOURCE_INPUT_PAIR,
 )
@@ -615,8 +616,8 @@ async def test_consent_without_pair_methods_still_asks() -> None:
     assert provider.trust_calls == [True]
 
 
-async def test_consent_on_combo_approves_the_input_in_one_click() -> None:
-    """A plain allow on a combo also approves the pending audio input, one submit total."""
+async def test_consent_on_combo_approves_the_input() -> None:
+    """A plain allow on a combo also approves the pending audio input."""
     api = _FakeApi([_desc(PairMethod.DYNAMIC_PAIRING_CODE)], unpaired_access=True)
     api.negotiated_role_ids = ["player@v1", "source@v1"]
     provider = _FakeProvider(api)
@@ -631,16 +632,15 @@ async def test_consent_on_combo_approves_the_input_in_one_click() -> None:
         CONNECT_METHOD_UNPAIRED_WITHOUT_INPUT,
         CONNECT_METHOD_PAIR,
     ]
-    assert step.last_step is True
     session.handle_submit({CONF_CONNECT_METHOD: CONNECT_METHOD_UNPAIRED_WITH_INPUT})
+    await _wait_step(session, step_type=FlowStepType.FORM, step_id="source_autostart")
+    session.handle_submit({CONF_SOURCE_AUTOSTART_TARGET: SOURCE_AUTOSTART_OFF})
 
     await _wait_for(lambda: session.finished)
     await task
     assert provider.trust_calls == [True]
     assert provider.allow_input_calls == [True]
-    mass.config.set_protocol_value.assert_called_once_with(
-        "client-1", CONF_SOURCE_INPUT_DECLINED, False
-    )
+    mass.config.set_protocol_value.assert_any_call("client-1", CONF_SOURCE_INPUT_DECLINED, False)
 
 
 async def test_consent_without_the_input_approves_playback_only() -> None:
@@ -684,6 +684,8 @@ async def test_consent_on_a_source_only_device_approves_its_input() -> None:
         CONNECT_METHOD_PAIR,
     ]
     session.handle_submit({CONF_CONNECT_METHOD: CONNECT_METHOD_UNPAIRED_WITH_INPUT})
+    await _wait_step(session, step_type=FlowStepType.FORM, step_id="source_autostart")
+    session.handle_submit({CONF_SOURCE_AUTOSTART_TARGET: SOURCE_AUTOSTART_OFF})
 
     await _wait_for(lambda: session.finished)
     await task
@@ -691,7 +693,7 @@ async def test_consent_on_a_source_only_device_approves_its_input() -> None:
 
 
 async def test_consent_without_a_choice_on_a_source_only_device_approves_its_input() -> None:
-    """With nothing to pick, the single consent click still approves the input."""
+    """With nothing to pick, the consent click still approves the input."""
     api = _FakeApi([], unpaired_access=True)
     api.negotiated_role_ids = ["source@v1"]
     provider = _FakeProvider(api)
@@ -703,6 +705,8 @@ async def test_consent_without_a_choice_on_a_source_only_device_approves_its_inp
     step = await _wait_step(session, step_type=FlowStepType.FORM, step_id="approve_device_source")
     assert step.entries == []
     session.handle_submit({})
+    await _wait_step(session, step_type=FlowStepType.FORM, step_id="source_autostart")
+    session.handle_submit({CONF_SOURCE_AUTOSTART_TARGET: SOURCE_AUTOSTART_OFF})
 
     await _wait_for(lambda: session.finished)
     await task
@@ -768,14 +772,13 @@ async def test_guest_device_with_an_input_consents_and_keeps_guest_access() -> N
     task = asyncio.create_task(player.run_setup_flow(session))
     step = await _wait_step(session, step_type=FlowStepType.FORM, step_id="approve_device_source")
     assert [entry.key for entry in step.entries] == [CONF_CONNECT_METHOD]
-    assert step.last_step is True
     session.handle_submit({CONF_CONNECT_METHOD: CONNECT_METHOD_UNPAIRED_WITH_INPUT})
+    await _wait_step(session, step_type=FlowStepType.FORM, step_id="source_autostart")
+    session.handle_submit({CONF_SOURCE_AUTOSTART_TARGET: SOURCE_AUTOSTART_OFF})
 
     await _wait_for(lambda: session.finished)
     await task
-    mass.config.set_protocol_value.assert_called_once_with(
-        "client-1", CONF_SOURCE_INPUT_DECLINED, False
-    )
+    mass.config.set_protocol_value.assert_any_call("client-1", CONF_SOURCE_INPUT_DECLINED, False)
     assert provider.trust_calls == [True]
     assert provider.allow_input_calls == [True]
     assert provider.start_calls == 0
@@ -829,15 +832,16 @@ async def test_opting_into_pairing_for_the_input_offers_only_pair_methods() -> N
 
     await _wait_step(session, step_type=FlowStepType.FORM, step_id="enter_pin")
     session.handle_submit({CONF_PAIRING_PIN: "123456"})
+    await _wait_step(session, step_type=FlowStepType.FORM, step_id="source_autostart")
+    session.handle_submit({CONF_SOURCE_AUTOSTART_TARGET: SOURCE_AUTOSTART_OFF})
 
     await _wait_for(lambda: session.finished)
     await task
     assert provider.submitted_pins == ["123456"]
 
 
-def _line_sense_combo(api: _FakeApi, player: SendspinBasePlayer) -> mock.MagicMock:
-    """Make the combo sense a line-in signal, with a speaker to autostart on."""
-    api.info_or_none.source_support = SimpleNamespace(features=SimpleNamespace(line_sense=True))
+def _source_combo(player: SendspinBasePlayer) -> mock.MagicMock:
+    """Give the combo a speaker to autostart its line-in on."""
     mass = _attach_mass(player)
     # attached to the player "client-1"
     player._player = cast("Any", SimpleNamespace(player_id="client-1"))
@@ -849,12 +853,12 @@ def _line_sense_combo(api: _FakeApi, player: SendspinBasePlayer) -> mock.MagicMo
 
 
 async def test_allowing_the_input_offers_line_in_autostart() -> None:
-    """Allowing a line-sensing input asks where it autostarts, prefilled with an earlier pick."""
+    """Allowing the input asks where it autostarts, prefilled with an earlier pick."""
     api = _combo_api_with_pending_source()
     provider = _FakeProvider(api)
     session, _mass = _make_session(_ok_finish)
     player = _make_player(api, provider)
-    mass = _line_sense_combo(api, player)
+    mass = _source_combo(player)
     session.context.values[CONF_SOURCE_AUTOSTART_TARGET] = "kitchen"
 
     task = asyncio.create_task(player.run_setup_flow(session))
@@ -880,7 +884,7 @@ async def test_declining_the_input_skips_line_in_autostart() -> None:
     provider = _FakeProvider(api)
     session, mass = _make_session(_ok_finish)
     player = _make_player(api, provider)
-    _line_sense_combo(api, player)
+    _source_combo(player)
 
     task = asyncio.create_task(player.run_setup_flow(session))
     await _wait_step(session, step_type=FlowStepType.FORM, step_id="approve_device_source")
@@ -891,13 +895,13 @@ async def test_declining_the_input_skips_line_in_autostart() -> None:
     assert "source_autostart" not in {step.step_id for step in _published_steps(mass)}
 
 
-async def test_pairing_a_line_sensing_device_offers_line_in_autostart() -> None:
-    """Pairing carries the input, so a line-sensing device picks its autostart target after."""
+async def test_pairing_a_device_with_an_input_offers_line_in_autostart() -> None:
+    """Pairing carries the input, so the device picks its autostart target after."""
     api = _combo_api_with_pending_source()
     provider = _FakeProvider(api)
     session, _mass = _make_session(_ok_finish)
     player = _make_player(api, provider)
-    mass = _line_sense_combo(api, player)
+    mass = _source_combo(player)
 
     task = asyncio.create_task(player.run_setup_flow(session))
     await _wait_step(session, step_type=FlowStepType.FORM, step_id="approve_device_source")

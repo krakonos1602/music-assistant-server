@@ -26,7 +26,9 @@ from music_assistant.models.setup_flow import AbortFlow
 from music_assistant.providers.sendspin.constants import (
     CONF_CONNECT_METHOD,
     CONF_PAIRING_PIN,
+    CONF_SOURCE_AUTOSTART_TARGET,
     CONNECT_METHOD_UNPAIRED,
+    SOURCE_AUTOSTART_OFF,
 )
 from music_assistant.providers.sendspin.player import SendspinBasePlayer
 from music_assistant.providers.sendspin.provider import SendspinProvider
@@ -346,6 +348,8 @@ async def test_a_held_device_approved_here_pairs_without_asking_again() -> None:
     task = asyncio.create_task(player.run_setup_flow(session))
     await _wait_step(session, step_type=FlowStepType.FORM, step_id="enter_pin")
     session.handle_submit({CONF_PAIRING_PIN: "123456"})
+    await _wait_step(session, step_type=FlowStepType.FORM, step_id="source_autostart")
+    session.handle_submit({CONF_SOURCE_AUTOSTART_TARGET: SOURCE_AUTOSTART_OFF})
 
     await _wait_for(lambda: session.finished)
     await task

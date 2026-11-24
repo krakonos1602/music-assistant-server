@@ -188,7 +188,7 @@
     },
     "source_autostart_target": {
       "label": "Automatically play line-in on",
-      "description": "Where this device's line-in plays automatically when a signal is detected. Requires the device to report signal presence.",
+      "description": "Where this device's line-in plays automatically when a signal is detected.",
       "options": {
         "off": "Off",
         "this_device": "This device"
@@ -201,9 +201,6 @@
     "allow_audio_analysis": {
       "label": "[%key:common::config_entries::allow_audio_analysis::label%]",
       "description": "[%key:common::config_entries::allow_audio_analysis::description%]"
-    },
-    "source_autostart_unavailable": {
-      "label": "This device does not support automatically playing its line-in on a speaker."
     },
     "source_input_action": {
       "label": "Audio input",

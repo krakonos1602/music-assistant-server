@@ -17,6 +17,7 @@ from music_assistant.providers.sendspin.constants import (
     CONF_ACTION_SOURCE_INPUT_DISABLE,
     CONF_ACTION_SOURCE_INPUT_ENABLE,
     CONF_CONNECT_METHOD,
+    CONF_SOURCE_AUTOSTART_TARGET,
     CONF_SOURCE_INPUT_ACTION,
     CONF_SOURCE_INPUT_DECLINED,
     CONNECT_METHOD_UNPAIRED_WITH_INPUT,
@@ -238,8 +239,14 @@ async def test_approving_the_input_of_a_new_client_stores_nothing(scenario: Scen
     display = _connect(sendspin, approvals, guest_access=True)
     await _register(scenario, display)
 
+    autostart_default = display._get_source_autostart_config_entries()[0].default_value
     await display.run_setup_flow(
-        _session({CONF_CONNECT_METHOD: CONNECT_METHOD_UNPAIRED_WITH_INPUT})
+        _session(
+            {
+                CONF_CONNECT_METHOD: CONNECT_METHOD_UNPAIRED_WITH_INPUT,
+                CONF_SOURCE_AUTOSTART_TARGET: str(autostart_default),
+            }
+        )
     )
     await scenario.settle()
 
