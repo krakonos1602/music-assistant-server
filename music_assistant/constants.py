@@ -77,6 +77,11 @@ ENV_TRUSTED_PROXY_HEADER: Final[str] = "MASS_TRUSTED_PROXY_HEADER"
 DEFAULT_TRUSTED_PROXY_HEADER: Final[str] = "X-Forwarded-User"
 ENV_TRUSTED_PROXY_LOGOUT_PATH: Final[str] = "MASS_TRUSTED_PROXY_LOGOUT_PATH"
 DEFAULT_TRUSTED_PROXY_LOGOUT_PATH: Final[str] = "/oauth2/logout"
+# Optional shared secret the proxy must present on the trusted listener. A firewall cannot
+# always tell the proxy apart from its neighbours (rootless containers all reach the host
+# from the same address), so the port alone is not proof of origin there.
+ENV_TRUSTED_PROXY_SECRET_FILE: Final[str] = "MASS_TRUSTED_PROXY_SECRET_FILE"
+TRUSTED_PROXY_SECRET_HEADER: Final[str] = "X-Proxy-Secret"
 # Marks a browser that already received a bootstrapped token, so a reload does not mint another.
 # Deliberately shorter-lived than the token it stands for, so the marker lapses first and the
 # next visit mints a fresh one instead of landing on the login form.

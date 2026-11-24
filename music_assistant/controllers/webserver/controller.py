@@ -56,6 +56,7 @@ from music_assistant.constants import (
     ENV_TRUSTED_PROXY_HEADER,
     ENV_TRUSTED_PROXY_LOGOUT_PATH,
     ENV_TRUSTED_PROXY_PORT,
+    ENV_TRUSTED_PROXY_SECRET_FILE,
     INGRESS_SERVER_PORT,
     RESOURCES_DIR,
     SENDSPIN_SERVER_PORT,
@@ -403,6 +404,23 @@ class WebserverController(CoreController):
                     ENV_TRUSTED_PROXY_LOGOUT_PATH, DEFAULT_TRUSTED_PROXY_LOGOUT_PATH
                 ),
             }
+            if secret_file := os.environ.get(ENV_TRUSTED_PROXY_SECRET_FILE):
+                try:
+                    async with aiofiles.open(secret_file, encoding="utf-8") as _file:
+                        secret = (await _file.read()).strip()
+                except OSError as err:
+                    self.logger.error("Cannot read trusted proxy secret: %s", err)
+                    secret = ""
+                if secret:
+                    trusted_proxy_site_params["secret"] = secret
+                else:
+                    # fail closed: a configured but unusable secret must not leave the
+                    # listener trusting whoever can reach the port
+                    self.logger.error(
+                        "Trusted proxy secret is configured but empty or unreadable - "
+                        "the trusted proxy listener stays disabled"
+                    )
+                    trusted_proxy_site_params = None
         port_value = config.get_value(CONF_BIND_PORT)
         assert isinstance(port_value, int)
         self.publish_port = port_value

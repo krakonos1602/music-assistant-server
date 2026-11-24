@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from collections.abc import Mapping
 from contextvars import ContextVar
@@ -19,6 +20,7 @@ from music_assistant.constants import (
     HASSIO_SUPERVISOR_IP,
     HOMEASSISTANT_SYSTEM_USER,
     MASS_LOGGER_NAME,
+    TRUSTED_PROXY_SECRET_HEADER,
     TRUSTED_PROXY_SITE_KEY,
     VERBOSE_LOG_LEVEL,
 )
@@ -494,6 +496,9 @@ async def resolve_trusted_proxy_user(mass: MusicAssistant, request: web.Request)
     """
     Resolve the user named by the trusted proxy's identity header.
 
+    When a shared secret is configured, the request must carry it as well; the listening
+    port alone then no longer vouches for the proxy.
+
     Only pre-existing, enabled users are accepted. Accounts are never provisioned from
     the header, so a misconfigured proxy cannot mint access, and revoking a user in
     Music Assistant is enough to lock them out regardless of what the IdP still asserts.
@@ -505,6 +510,16 @@ async def resolve_trusted_proxy_user(mass: MusicAssistant, request: web.Request)
     site_params = request.app.get(TRUSTED_PROXY_SITE_KEY)
     if not site_params:
         return None
+
+    if secret := site_params.get("secret"):
+        presented = request.headers.get(TRUSTED_PROXY_SECRET_HEADER, "")
+        if not hmac.compare_digest(presented.encode(), secret.encode()):
+            if request.headers.get(site_params["header"]):
+                LOGGER.warning(
+                    "Identity header on the trusted proxy listener without a valid %s - ignored",
+                    TRUSTED_PROXY_SECRET_HEADER,
+                )
+            return None
 
     identity = request.headers.get(site_params["header"])
     if not identity:
